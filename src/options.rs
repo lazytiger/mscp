@@ -22,4 +22,8 @@ pub struct Options {
     /// the destination file path
     #[arg(short = 'd', long)]
     pub destination: String,
+
+    /// the buffer size for copy routine
+    #[arg(short = 'b', long, default_value = "8096")]
+    pub buffer_size: usize,
 }

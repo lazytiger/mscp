@@ -33,6 +33,7 @@ pub async fn run() -> types::Result<()> {
     let segment_size = size / segments;
     let mut set: JoinSet<types::Result<u64>> = JoinSet::new();
     let begin = Instant::now();
+    let buffer_size = options.buffer_size.max(1024);
     for i in 0..segments {
         let source = options.source.clone();
         let destination = options.destination.clone();
@@ -48,7 +49,7 @@ pub async fn run() -> types::Result<()> {
                 .open(destination.as_str())
                 .await?;
             destination.seek(SeekFrom::Start(i * segment_size)).await?;
-            let mut buf = vec![0u8; 1024];
+            let mut buf = vec![0u8; buffer_size];
             let mut total = if i == segments - 1 {
                 size - i * segment_size
             } else {
@@ -56,7 +57,7 @@ pub async fn run() -> types::Result<()> {
             } as usize;
             log::debug!("copy segment {i} now");
             while total > 0 {
-                let data = if total > buf.len() {
+                let data = if total >= buf.len() {
                     buf.as_mut_slice()
                 } else {
                     &mut buf.as_mut_slice()[..total]
@@ -75,7 +76,9 @@ pub async fn run() -> types::Result<()> {
     }
     let elapsed = begin.elapsed().as_secs_f64();
     log::info!(
-        "copy finished, cost {}s, speed is {}MB/s",
+        "copy from `{}` to `{}` finished, cost {}s, speed is {}MB/s",
+        options.source,
+        options.destination,
         elapsed,
         size as f64 / 1024.0 / 1024.0 / elapsed
     );
