@@ -43,7 +43,8 @@ pub async fn run() -> types::Result<()> {
     let begin = Instant::now();
     while offset < size {
         if join_set.len() == thread_count {
-            join_set.join_next().await;
+            let (m, n) = join_set.join_next().await.unwrap().unwrap()?;
+            log::debug!("copy segment [{}..{}] finished", m, m + n);
         }
         let source = options.source.clone();
         let destination = options.destination.clone();
