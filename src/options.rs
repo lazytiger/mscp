@@ -11,9 +11,13 @@ pub struct Options {
     #[arg(short = 'E', long, default_value = "2")]
     pub log_level: u8,
 
-    /// number of segments to be split into.
-    #[arg(short = 'S', long, default_value = "8")]
-    pub segments: usize,
+    /// number of threads to run copy command.
+    #[arg(short = 't', long, default_value = "8")]
+    pub thread_count: usize,
+
+    /// the size of each segment, unit is MB.
+    #[arg(short = 'S', long)]
+    pub segment_size: Option<u64>,
 
     /// the source file path
     #[arg(short = 's', long)]
@@ -23,7 +27,7 @@ pub struct Options {
     #[arg(short = 'd', long)]
     pub destination: String,
 
-    /// the buffer size for copy routine
-    #[arg(short = 'b', long, default_value = "8096")]
+    /// the buffer size for copy routine, unity is kB
+    #[arg(short = 'b', long, default_value = "8")]
     pub buffer_size: usize,
 }

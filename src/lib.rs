@@ -3,6 +3,7 @@ use clap::Parser;
 use std::io::SeekFrom;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 
 mod logger;
@@ -28,52 +29,40 @@ pub async fn run() -> types::Result<()> {
         file.set_len(size).await?;
         file.flush().await?;
     }
+    let thread_count = options
+        .thread_count
+        .min(Handle::current().metrics().num_workers());
+    let segment_size = options
+        .segment_size
+        .map(|s| s.max(1) * 1024 * 1024)
+        .unwrap_or((size - (size % thread_count as u64)) / thread_count as u64 + 1);
+    let buffer_size = options.buffer_size.max(8) * 1024;
+    let mut join_set = JoinSet::new();
+    let mut offset = 0;
 
-    let segments = options.segments as u64;
-    let segment_size = size / segments;
-    let mut set: JoinSet<types::Result<u64>> = JoinSet::new();
     let begin = Instant::now();
-    let buffer_size = options.buffer_size.max(1024);
-    for i in 0..segments {
+    while offset < size {
+        if join_set.len() == thread_count {
+            join_set.join_next().await;
+        }
         let source = options.source.clone();
         let destination = options.destination.clone();
-        set.spawn(async move {
-            let mut source = tokio::fs::OpenOptions::new()
-                .read(true)
-                .open(source.as_str())
-                .await?;
-            source.seek(SeekFrom::Start(i * segment_size)).await?;
-            let mut destination = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(destination.as_str())
-                .await?;
-            destination.seek(SeekFrom::Start(i * segment_size)).await?;
-            let mut buf = vec![0u8; buffer_size];
-            let mut total = if i == segments - 1 {
-                size - i * segment_size
-            } else {
-                segment_size
-            } as usize;
-            log::debug!("copy segment {i} now");
-            while total > 0 {
-                let data = if total >= buf.len() {
-                    buf.as_mut_slice()
-                } else {
-                    &mut buf.as_mut_slice()[..total]
-                };
-                source.read_exact(data).await?;
-                destination.write_all(data).await?;
-                total -= data.len();
-            }
-            destination.flush().await?;
-            Ok(i)
-        });
+        let copy_size = segment_size.min(size - offset);
+        join_set.spawn(copy_segment(
+            source,
+            destination,
+            offset,
+            copy_size,
+            buffer_size,
+        ));
+        offset += copy_size;
     }
-    while let Some(res) = set.join_next().await {
-        let i = res.unwrap()?;
-        log::debug!("segment {i} finished");
+
+    while let Some(res) = join_set.join_next().await {
+        let (offset, copy_size) = res.unwrap()?;
+        log::debug!("copy segment [{}..{}] finished", offset, offset + copy_size);
     }
+
     let elapsed = begin.elapsed().as_secs_f64();
     log::info!(
         "copy from `{}` to `{}` finished, cost {}s, speed is {}MB/s",
@@ -83,4 +72,39 @@ pub async fn run() -> types::Result<()> {
         size as f64 / 1024.0 / 1024.0 / elapsed
     );
     Ok(())
+}
+
+async fn copy_segment(
+    source: String,
+    destination: String,
+    offset: u64,
+    copy_size: u64,
+    buffer_size: usize,
+) -> types::Result<(u64, u64)> {
+    let mut source = tokio::fs::OpenOptions::new()
+        .read(true)
+        .open(source.as_str())
+        .await?;
+    source.seek(SeekFrom::Start(offset)).await?;
+    let mut destination = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(destination.as_str())
+        .await?;
+    destination.seek(SeekFrom::Start(offset)).await?;
+    let mut buf = vec![0u8; buffer_size];
+    let mut total = copy_size as usize;
+    log::debug!("copy segment [{}..{}] now", offset, offset + copy_size);
+    while total > 0 {
+        let data = if total >= buf.len() {
+            buf.as_mut_slice()
+        } else {
+            &mut buf.as_mut_slice()[..total]
+        };
+        source.read_exact(data).await?;
+        destination.write_all(data).await?;
+        total -= data.len();
+    }
+    destination.flush().await?;
+    Ok((offset, copy_size))
 }
