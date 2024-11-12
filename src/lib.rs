@@ -1,7 +1,7 @@
+use crate::options::Options;
 use clap::Parser;
 use std::io::SeekFrom;
-
-use crate::options::Options;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::task::JoinSet;
 
@@ -32,6 +32,7 @@ pub async fn run() -> types::Result<()> {
     let segments = options.segments as u64;
     let segment_size = size / segments;
     let mut set: JoinSet<types::Result<u64>> = JoinSet::new();
+    let begin = Instant::now();
     for i in 0..segments {
         let source = options.source.clone();
         let destination = options.destination.clone();
@@ -72,5 +73,11 @@ pub async fn run() -> types::Result<()> {
         let i = res.unwrap()?;
         log::debug!("segment {i} finished");
     }
+    let elapsed = begin.elapsed().as_secs_f64();
+    log::info!(
+        "copy finished, cost {}s, speed is {}MB/s",
+        elapsed,
+        size as f64 / 1024.0 / 1024.0 / elapsed
+    );
     Ok(())
 }
